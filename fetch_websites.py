@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-"""Ищет официальные сайты клиник через «Поиск по организациям» Яндекса
-и дописывает их в data/clinics.csv (колонка website).
+"""Ищет официальные сайты клиник через поисковую выдачу и дописывает их
+в data/clinics.csv (колонка website).
 
-В памятке сайтов нет (там только sovcomins.ru — сайт страховой), поэтому
-берём их из каталога организаций Яндекса по названию клиники.
-
-Нужен ключ API с продуктом «Поиск по организациям» — положите его в .env
-как YANDEX_ORG_KEY. Как и геокодер, API работает с российского IP.
+Бесплатного API «Поиск по организациям» нет, поэтому берём выдачу поисковика:
+пробуем Bing, запасной вариант — DuckDuckGo. Результаты фильтруем от
+агрегаторов (2ГИС, Продокторов, DocDoc и т.п.) и берём первую подходящую
+ссылку.
 
 Использование:
     python3 fetch_websites.py              # искать все недостающие сайты
     python3 fetch_websites.py --limit 5    # быстрая проверка на первых
-    python3 fetch_websites.py --dry-run    # показать, что будем искать
+    python3 fetch_websites.py --dry-run    # показать запросы без поиска
 
 Результат кэшируется в data/websites.json (название клиники -> url),
 повторные запуски не тратят лимиты на уже найденное.
@@ -20,22 +19,36 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import json
 import re
 import sys
 import time
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import requests
-
-import geocode
 
 ROOT = Path(__file__).parent
 CSV_FILE = ROOT / "data" / "clinics.csv"
 SITES_FILE = ROOT / "data" / "websites.json"
 
-ORG_SEARCH_URL = "https://search-maps.yandex.ru/v1/"
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+    ),
+    "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+}
+
+# Каталоги-агрегаторы: их сайт нам не нужен
+AGGREGATORS = (
+    "2gis", "prodoctorov", "docdoc", "napopravku", "medbooking", "zoon",
+    "flamp", "yell", "health.mail", "yandex.ru/maps", "yandex.by", "yandex.kz",
+    "sberhealth", "instadoc", "vse-zabolevaniya", "lookmedbook", "mamadeti",
+    "spr.ru", "medicina.ru", "doctorpiter", "medweb", "medsovet", "sprosivracha",
+)
 
 ORG_PREFIXES = (
     "ФГБУЗ", "ФГАОУ", "ФГБНУ", "ФГБОУ", "ГБУЗ", "ГАУЗ", "ФГБУ", "ООО", "МУЗ",
@@ -60,10 +73,7 @@ def save_sites(sites: dict[str, str]) -> None:
 
 
 def search_query(clinic: str) -> str:
-    """Человекочитаемое имя для поиска: без юрформы и кавычек.
-
-    «ГБУЗ МО «Красногорская больница»» -> «Красногорская больница».
-    """
+    """Человекочитаемое имя для поиска: без юрформы и кавычек."""
     q = clinic.strip()
     for tok in ORG_PREFIXES:
         if q.startswith(tok):
@@ -73,36 +83,90 @@ def search_query(clinic: str) -> str:
                 "", q,
             )
             break
-    q = q.strip("«»\"() :,.-")
+    q = q.strip('«»"() :,.-')
+    q = re.sub(r"\s*\([^)]*\)\s*$", "", q)   # хвост «(АО «ЦБЭЛИС»)»
+    q = re.sub(r"\s*ДЗМ\s*$", "", q)  # «…Кончаловского ДЗМ» -> «…Кончаловского»
     return q or clinic.strip()
 
 
-def find_website(key: str, clinic: str) -> str:
-    """Ищет сайт организации; возвращает url или пустую строку."""
-    queries = [search_query(clinic), clinic]
-    seen: set[str] = set()
-    for q in queries:
-        if q in seen:
-            continue
-        seen.add(q)
-        try:
-            resp = requests.get(
-                ORG_SEARCH_URL,
-                params={"apikey": key, "text": q, "type": "biz",
-                        "lang": "ru_RU", "results": 5},
-                timeout=15,
-            )
-            if resp.status_code != 200:
-                continue
-            data = resp.json()
-            for feature in data.get("features", []):
-                meta = feature.get("properties", {}).get("CompanyMetaData", {})
-                url = (meta.get("url") or "").strip()
-                if url:
+def yandex_results(query: str) -> list[tuple[str, str]]:
+    """Органическая выдача Яндекса. Работает с российского IP; лучше всего
+    находит сайты российских клиник."""
+    resp = requests.get("https://yandex.ru/search/",
+                        params={"text": query}, headers=HEADERS, timeout=15)
+    resp.raise_for_status()
+    out = []
+    for m in re.finditer(r'<a\b[^>]*class="[^"]*organic__url[^"]*"[^>]*>', resp.text):
+        href = re.search(r'href="([^"]+)"', m.group(0))
+        if href:
+            url = href.group(1)
+            if url.startswith("/"):
+                url = "https://yandex.ru" + url
+            out.append((url, ""))
+    return out
+
+
+def bing_decode(href: str) -> str:
+    """Bing-ссылки-редиректы вида /ck/a?...&u=a1<base64> -> настоящий URL."""
+    if "bing.com/ck/" in href:
+        m = re.search(r"[?&]u=a1([A-Za-z0-9_\-]+)", href)
+        if m:
+            try:
+                return base64.urlsafe_b64decode(m.group(1) + "==").decode("utf-8", "ignore")
+            except Exception:
+                pass
+    return href
+
+
+def bing_results(query: str) -> list[tuple[str, str]]:
+    resp = requests.get("https://www.bing.com/search",
+                        params={"q": query}, headers=HEADERS, timeout=15)
+    resp.raise_for_status()
+    out = []
+    for m in re.finditer(
+        r'<li class="b_algo".*?<h2><a[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+        resp.text, re.S,
+    ):
+        href, title = m.group(1), re.sub(r"<[^>]+>", "", m.group(2))
+        out.append((bing_decode(href), title.strip()))
+    return out
+
+
+def ddg_results(query: str) -> list[tuple[str, str]]:
+    resp = requests.get("https://html.duckduckgo.com/html/",
+                        params={"q": query}, headers=HEADERS, timeout=15)
+    resp.raise_for_status()
+    out = []
+    for m in re.finditer(r'class="result__a"[^>]*href="([^"]+)"', resp.text):
+        href = m.group(1)
+        inner = re.search(r"uddg=([^&]+)", href)
+        url = unquote(inner.group(1)) if inner else href
+        title_m = re.search(r">([^<]+)</a>", resp.text[m.start():m.start() + 400])
+        title = unquote(title_m.group(1)) if title_m else ""
+        out.append((url, title.strip()))
+    return out
+
+
+def is_aggregator(url: str) -> bool:
+    host = (urlparse(url).netloc + urlparse(url).path).lower()
+    return any(a in host for a in AGGREGATORS) or "bing.com" in host
+
+
+def find_website(clinic: str) -> str:
+    """Ищет сайт клиники по поисковой выдаче; возвращает url или ''."""
+    human = search_query(clinic)
+    queries = [f"{human} официальный сайт", human]
+    for query in queries:
+        for fetcher in (yandex_results, bing_results, ddg_results):
+            try:
+                results = fetcher(query)
+            except requests.RequestException:
+                results = []
+            for url, _ in results:
+                if url and not is_aggregator(url) and url.startswith("http"):
                     return url
-        except requests.RequestException:
-            continue
-        time.sleep(0.3)
+            time.sleep(0.7)
+        time.sleep(0.7)
     return ""
 
 
@@ -121,7 +185,6 @@ def main(argv: list[str] | None = None) -> int:
     with CSV_FILE.open(encoding="utf-8", newline="") as f:
         rows = list(csv.DictReader(f))
 
-    # уникальные названия клиник в порядке появления
     unique_clinics = list(dict.fromkeys(r["clinic"] for r in rows if r["clinic"]))
     if args.limit:
         unique_clinics = unique_clinics[: args.limit]
@@ -136,27 +199,13 @@ def main(argv: list[str] | None = None) -> int:
     missing = [c for c in unique_clinics if c not in sites]
     print(f"Уже есть сайтов: {len(sites)}, ищем: {len(missing)}")
 
-    if missing:
-        key = ""
-        try:
-            key = geocode.read_env().get("YANDEX_ORG_KEY", "")
-        except Exception:
-            key = ""
-        if not key:
-            print(
-                "Не задан YANDEX_ORG_KEY (ключ «Поиск по организациям»). "
-                "Добавьте его в .env — см. .env.example.",
-                file=sys.stderr,
-            )
-            return 1
+    for i, name in enumerate(missing, start=1):
+        url = find_website(name)
+        sites[name] = url
+        save_sites(sites)
+        print(f"[{i}/{len(missing)}] {url or '-':40} {name[:50]}")
+        time.sleep(0.5)  # бережём поисковик от троттлинга
 
-        for i, name in enumerate(missing, start=1):
-            url = find_website(key, name)
-            sites[name] = url
-            save_sites(sites)  # сохраняем после каждого, чтобы не терять прогресс
-            print(f"[{i}/{len(missing)}] {url or '-':35} {name[:50]}")
-
-    # дописываем сайты в CSV
     for r in rows:
         r["website"] = sites.get(r["clinic"], "")
     with CSV_FILE.open("w", encoding="utf-8", newline="") as f:
