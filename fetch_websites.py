@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
-"""Ищет официальные сайты клиник через поисковую выдачу и дописывает их
-в data/clinics.csv (колонка website).
+"""Ищет сайты и рейтинги клиник и дописывает их в data/clinics.csv.
 
-Бесплатного API «Поиск по организациям» нет, поэтому берём выдачу поисковика:
-пробуем Bing, запасной вариант — DuckDuckGo. Результаты фильтруем от
-агрегаторов (2ГИС, Продокторов, DocDoc и т.п.) и берём первую подходящую
-ссылку.
+Два источника, оба через настоящий Chromium (Playwright, видимый режим —
+иначе поисковики отдают капчу):
+
+1. Сайт: выдача DuckDuckGo html (официальный сайт клиники).
+2. Рейтинг: Яндекс.Карты (?text=<название>) — первая организация в выдаче,
+   рейтинг вида «4,8».
+
+Результаты кэшируются в data/websites.json и data/ratings.json — повторные
+запуски не тратят время на уже найденное.
 
 Использование:
-    python3 fetch_websites.py              # искать все недостающие сайты
-    python3 fetch_websites.py --limit 5    # быстрая проверка на первых
-    python3 fetch_websites.py --dry-run    # показать запросы без поиска
-
-Результат кэшируется в data/websites.json (название клиники -> url),
-повторные запуски не тратят лимиты на уже найденное.
+    python3 fetch_websites.py              # все клиники
+    python3 fetch_websites.py --limit 5    # первые N (проверка)
+    python3 fetch_websites.py --dry-run    # показать запросы
 """
 
 from __future__ import annotations
 
 import argparse
-import base64
 import csv
 import json
 import re
@@ -28,28 +28,12 @@ import time
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-import requests
+from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).parent
 CSV_FILE = ROOT / "data" / "clinics.csv"
 SITES_FILE = ROOT / "data" / "websites.json"
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
-    ),
-    "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-}
-
-# Каталоги-агрегаторы: их сайт нам не нужен
-AGGREGATORS = (
-    "2gis", "prodoctorov", "docdoc", "napopravku", "medbooking", "zoon",
-    "flamp", "yell", "health.mail", "yandex.ru/maps", "yandex.by", "yandex.kz",
-    "sberhealth", "instadoc", "vse-zabolevaniya", "lookmedbook", "mamadeti",
-    "spr.ru", "medicina.ru", "doctorpiter", "medweb", "medsovet", "sprosivracha",
-    "google.com", "google.ru",
-)
+RATINGS_FILE = ROOT / "data" / "ratings.json"
 
 ORG_PREFIXES = (
     "ФГБУЗ", "ФГАОУ", "ФГБНУ", "ФГБОУ", "ГБУЗ", "ГАУЗ", "ФГБУ", "ООО", "МУЗ",
@@ -57,140 +41,99 @@ ORG_PREFIXES = (
     "Больница", "Медицинское", "Частное", "Общество", "Филиал",
 )
 
+AGGREGATORS = (
+    "2gis", "prodoctorov", "docdoc", "napopravku", "medbooking", "zoon",
+    "flamp", "yell", "health.mail", "yandex.ru/maps", "yandex.by", "yandex.kz",
+    "sberhealth", "instadoc", "vse-zabolevaniya", "lookmedbook", "mamadeti",
+    "spr.ru", "medicina.ru", "doctorpiter", "medweb", "medsovet", "sprosivracha",
+    "google.com", "google.ru", "duckduckgo.com",
+)
 
-def load_sites() -> dict[str, str]:
-    if SITES_FILE.exists():
+CHROME_ARGS = ["--disable-blink-features=AutomationControlled", "--lang=ru-RU"]
+
+
+def load_json(path: Path) -> dict:
+    if path.exists():
         try:
-            return json.loads(SITES_FILE.read_text(encoding="utf-8"))
+            return json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             return {}
     return {}
 
 
-def save_sites(sites: dict[str, str]) -> None:
-    SITES_FILE.write_text(
-        json.dumps(sites, ensure_ascii=False, indent=1), encoding="utf-8"
-    )
+def save_json(path: Path, data: dict) -> None:
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 def search_query(clinic: str) -> str:
-    """Человекочитаемое имя для поиска: без юрформы и кавычек."""
+    """Человекочитаемое имя для поиска: без юрформы, кавычек и хвостов."""
     q = clinic.strip()
     for tok in ORG_PREFIXES:
         if q.startswith(tok):
             q = q[len(tok):].strip()
-            q = re.sub(
-                r"^(МО|Московской области|города Москвы|города Подмосковья)\s*",
-                "", q,
-            )
+            q = re.sub(r"^(МО|Московской области|города Москвы|города Подмосковья)\s*", "", q)
             break
-    q = re.sub(r"\s*\([^()]*\)", "", q)      # убрать «(АО «ЦБЭЛИС»)»
+    q = re.sub(r"\s*\([^()]*\)", "", q)
     q = q.strip('«»"() :,.-')
-    q = re.sub(r"\s*ДЗМ\s*$", "", q)  # «…Кончаловского ДЗМ» -> «…Кончаловского»
+    q = re.sub(r"\s*ДЗМ\s*$", "", q)
     return q or clinic.strip()
 
 
-def yandex_results(query: str) -> list[tuple[str, str]]:
-    """Органическая выдача Яндекса. Работает с российского IP; лучше всего
-    находит сайты российских клиник."""
-    resp = requests.get("https://yandex.ru/search/",
-                        params={"text": query}, headers=HEADERS, timeout=15)
-    resp.raise_for_status()
-    out = []
-    for m in re.finditer(r'<a\b[^>]*class="[^"]*organic__url[^"]*"[^>]*>', resp.text):
-        href = re.search(r'href="([^"]+)"', m.group(0))
-        if href:
-            url = href.group(1)
-            if url.startswith("/"):
-                url = "https://yandex.ru" + url
-            out.append((url, ""))
-    return out
-
-
-def bing_decode(href: str) -> str:
-    """Bing-ссылки-редиректы вида /ck/a?...&u=a1<base64> -> настоящий URL."""
-    if "bing.com/ck/" in href:
-        m = re.search(r"[?&]u=a1([A-Za-z0-9_\-]+)", href)
-        if m:
-            try:
-                return base64.urlsafe_b64decode(m.group(1) + "==").decode("utf-8", "ignore")
-            except Exception:
-                pass
-    return href
-
-
-def google_results(query: str) -> list[tuple[str, str]]:
-    """Выдача Google: ссылки вида /url?q=<url>. Часто требует обхода капчи,
-    поэтому это запасной вариант — основной источник Яндекс."""
-    resp = requests.get("https://www.google.com/search",
-                        params={"q": query, "hl": "ru"}, headers=HEADERS, timeout=15)
-    resp.raise_for_status()
-    out = []
-    for m in re.finditer(r'<a[^>]*href="/url\?q=([^&"]+)', resp.text):
-        url = unquote(m.group(1))
-        if url.startswith("http"):
-            out.append((url, ""))
-    return out
-
-
-def bing_results(query: str) -> list[tuple[str, str]]:
-    resp = requests.get("https://www.bing.com/search",
-                        params={"q": query}, headers=HEADERS, timeout=15)
-    resp.raise_for_status()
-    out = []
-    for m in re.finditer(
-        r'<li class="b_algo".*?<h2><a[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
-        resp.text, re.S,
-    ):
-        href, title = m.group(1), re.sub(r"<[^>]+>", "", m.group(2))
-        out.append((bing_decode(href), title.strip()))
-    return out
-
-
-def ddg_results(query: str) -> list[tuple[str, str]]:
-    resp = requests.get("https://html.duckduckgo.com/html/",
-                        params={"q": query}, headers=HEADERS, timeout=15)
-    resp.raise_for_status()
-    out = []
-    for m in re.finditer(r'class="result__a"[^>]*href="([^"]+)"', resp.text):
-        href = m.group(1)
-        inner = re.search(r"uddg=([^&]+)", href)
-        url = unquote(inner.group(1)) if inner else href
-        title_m = re.search(r">([^<]+)</a>", resp.text[m.start():m.start() + 400])
-        title = unquote(title_m.group(1)) if title_m else ""
-        out.append((url, title.strip()))
-    return out
-
-
 def is_aggregator(url: str) -> bool:
-    host = (urlparse(url).netloc + urlparse(url).path).lower()
-    return any(a in host for a in AGGREGATORS) or "bing.com" in host
+    try:
+        host = (urlparse(url).netloc + urlparse(url).path).lower()
+    except Exception:
+        return True
+    return any(a in host for a in AGGREGATORS)
 
 
-def find_website(clinic: str) -> str:
-    """Ищет сайт клиники по поисковой выдаче; возвращает url или ''."""
-    human = search_query(clinic)
-    queries = [f"{human} официальный сайт", human]
-    for query in queries:
-        for fetcher in (yandex_results, google_results, bing_results, ddg_results):
-            try:
-                results = fetcher(query)
-            except requests.RequestException:
-                results = []
-            for url, _ in results:
-                if url and not is_aggregator(url) and url.startswith("http"):
-                    return url
-            time.sleep(0.7)
-        time.sleep(0.7)
+def find_website(page, human: str) -> str:
+    """Сайт клиники через DDG html."""
+    q = f"{human} официальный сайт"
+    try:
+        page.goto("https://html.duckduckgo.com/html/?q=" + q.replace(" ", "+"), timeout=35000)
+        page.wait_for_timeout(2500)
+        n = page.locator("a.result__a").count()
+        for i in range(min(n, 8)):
+            href = page.locator("a.result__a").nth(i).get_attribute("href") or ""
+            m = re.search(r"uddg=([^&]+)", href)
+            url = unquote(m.group(1)) if m else href
+            if url.startswith("http") and not is_aggregator(url):
+                return url
+    except Exception:
+        pass
     return ""
+
+
+def find_rating(page, human: str) -> float | None:
+    """Рейтинг клиники из Яндекс.Карт: первая организация в выдаче."""
+    try:
+        page.goto("https://yandex.ru/maps/?text=" + human.replace(" ", "+"), timeout=40000)
+        page.wait_for_timeout(6000)
+        body = page.evaluate("() => document.body ? document.body.innerText : ''")
+        # ищем рейтинг первой карточки: имя организации, затем «4,8»
+        pos = body.find(human)
+        if pos == -1:
+            # поиск по первым 25 символам имени
+            pos = body.find(human[:25]) if len(human) > 25 else -1
+        window_start = max(0, pos) if pos != -1 else 0
+        window = body[window_start: window_start + 200]
+        m = re.search(r"([1-5][.,]\d)", window)
+        if m:
+            return float(m.group(1).replace(",", "."))
+        # если имя не нашли — первый рейтинг в тексте вообще
+        m2 = re.search(r"([1-5][.,]\d)", body[:600])
+        if m2:
+            return float(m2.group(1).replace(",", "."))
+    except Exception:
+        pass
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--limit", type=int, default=0,
-                        help="обработать только первые N клиник (для проверки)")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="показать, какие имена будем искать, без запросов")
+    parser.add_argument("--limit", type=int, default=0, help="только первые N клиник")
+    parser.add_argument("--dry-run", action="store_true", help="показать запросы без поиска")
     args = parser.parse_args(argv)
 
     if not CSV_FILE.exists():
@@ -207,31 +150,43 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         for name in unique_clinics[:10]:
             print(f"  {name!r:60} -> {search_query(name)!r}")
-        print(f"Всего уникальных клиник для поиска: {len(unique_clinics)}")
+        print(f"Всего уникальных клиник: {len(unique_clinics)}")
         return 0
 
-    sites = load_sites()
-    missing = [c for c in unique_clinics if c not in sites]
-    print(f"Уже есть сайтов: {len(sites)}, ищем: {len(missing)}")
+    sites = load_json(SITES_FILE)
+    ratings = load_json(RATINGS_FILE)
+    todo = [c for c in unique_clinics if c not in sites or c not in ratings]
+    print(f"Сайтов в кэше: {len(sites)}, рейтингов: {len(ratings)}, осталось: {len(todo)}")
 
-    for i, name in enumerate(missing, start=1):
-        url = find_website(name)
-        sites[name] = url
-        save_sites(sites)
-        print(f"[{i}/{len(missing)}] {url or '-':40} {name[:50]}")
-        time.sleep(0.5)  # бережём поисковик от троттлинга
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False, args=CHROME_ARGS)
+        ctx = browser.new_context(locale="ru-RU", timezone_id="Europe/Moscow")
+        page = ctx.new_page()
+        page.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
+
+        for i, name in enumerate(todo, start=1):
+            human = search_query(name)
+            if name not in sites:
+                sites[name] = find_website(page, human)
+                save_json(SITES_FILE, sites)
+            if name not in ratings:
+                ratings[name] = find_rating(page, human)
+                save_json(RATINGS_FILE, ratings)
+            print(f"[{i}/{len(todo)}] сайт={sites[name] or '-':32} рейтинг={ratings[name]} {name[:40]}")
+
+        browser.close()
 
     for r in rows:
         r["website"] = sites.get(r["clinic"], "")
+        r["rating"] = ratings.get(r["clinic"], "")
     with CSV_FILE.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(
-            f, fieldnames=["address", "clinic", "phone", "hours", "services", "website"]
-        )
+        writer = csv.DictWriter(f, fieldnames=["address", "clinic", "phone", "hours", "services", "website", "rating"])
         writer.writeheader()
         writer.writerows(rows)
 
-    found = sum(1 for r in rows if r["website"])
-    print(f"Готово: сайтов найдено у {found} из {len(rows)} записей")
+    found_sites = sum(1 for r in rows if r["website"])
+    found_ratings = sum(1 for r in rows if r["rating"])
+    print(f"Готово: сайтов у {found_sites}, рейтингов у {found_ratings} из {len(rows)} записей")
     return 0
 
 

@@ -107,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
             "hours": r["hours"],
             "services": r["services"],
             "website": r.get("website", "").strip(),
+            "rating": r.get("rating", "").strip(),
         })
 
     DOCS.mkdir(parents=True, exist_ok=True)
@@ -158,6 +159,11 @@ def render_page(data_json: str, api_key: str) -> str:
   #sidebar .sub {{ color: #667; font-size: 12.5px; }}
   #search {{ margin: 10px 16px 6px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; }}
   #filters {{ display: flex; gap: 6px; padding: 0 16px 10px; flex-wrap: wrap; }}
+  #filters2 {{ padding: 0 16px 10px; }}
+  #ratingFilter {{
+    width: 100%; padding: 7px 10px; border: 1px solid var(--border);
+    border-radius: 8px; font-size: 13px; background: #fff; color: #223;
+  }}
   #filters button {{
     border: 1px solid var(--border); background: #fff; border-radius: 20px;
     padding: 5px 12px; font-size: 12.5px; cursor: pointer; color: #445;
@@ -205,6 +211,13 @@ def render_page(data_json: str, api_key: str) -> str:
       <button data-filter="stomat">Стоматология</button>
       <button data-filter="urgent">Экстренные</button>
     </div>
+    <div id="filters2">
+      <select id="ratingFilter" aria-label="Фильтр по рейтингу">
+        <option value="0">Любой рейтинг</option>
+        <option value="4.5">⭐ от 4.5</option>
+        <option value="4.0">⭐ от 4.0</option>
+      </select>
+    </div>
     <div id="count"></div>
     <div id="list"></div>
   </div>
@@ -223,6 +236,7 @@ const listEl = document.getElementById('list');
 const searchEl = document.getElementById('search');
 const countEl = document.getElementById('count');
 const sidebar = document.getElementById('sidebar');
+const ratingFilter = document.getElementById('ratingFilter');
 document.getElementById('toggle').addEventListener('click', () => sidebar.classList.toggle('open'));
 
 let activeFilter = 'all';
@@ -244,12 +258,16 @@ function balloonContent(c) {{
   }}).join('');
   const hours = c.hours ? `<div>🕒 ${{c.hours}}</div>` : '';
   const services = c.services ? `<div>🏥 ${{c.services}}</div>` : '';
+  const rating = c.rating ? `<div>⭐ ${{c.rating}}</div>` : '';
   const website = c.website ? `<div>🌐 <a href="${{c.website}}" target="_blank" rel="noopener">${{c.website}}</a></div>` : '';
-  return `<b>${{c.clinic}}</b><br><div>${{c.address}}</div>${{phones}}${{hours}}${{services}}${{website}}`;
+  const yalink = `https://yandex.ru/maps/?pt=${{c.lon}},${{c.lat}}&z=17&l=pm2rdl&text=${{encodeURIComponent(c.address)}}`;
+  const yandex = `<div>🗺 <a href="${{yalink}}" target="_blank" rel="noopener">Подробнее в Яндекс Картах</a></div>`;
+  return `<b>${{c.clinic}}</b><br><div>${{c.address}}</div>${{rating}}${{phones}}${{hours}}${{services}}${{website}}${{yandex}}`;
 }}
 
 function visibleClinics() {{
   const q = searchEl.value.trim().toLowerCase();
+  const minRating = parseFloat(ratingFilter.value) || 0;
   return CLINICS.filter(c => {{
     const text = (c.clinic + ' ' + c.address).toLowerCase();
     const s = (c.services || '').toLowerCase();
@@ -259,7 +277,9 @@ function visibleClinics() {{
       activeFilter === 'home' ? s.includes('на дому') :
       activeFilter === 'stomat' ? s.includes('стоматолог') :
       activeFilter === 'urgent' ? s.includes('экстренн') : true;
-    return byFilter && (!q || text.includes(q));
+    const r = parseFloat((c.rating || '').replace(',', '.'));
+    const byRating = !c.rating || r >= minRating;
+    return byFilter && byRating && (!q || text.includes(q));
   }});
 }}
 
@@ -323,6 +343,7 @@ function initMap() {{
 }}
 
 searchEl.addEventListener('input', applyFilters);
+ratingFilter.addEventListener('change', applyFilters);
 document.querySelectorAll('#filters button').forEach(btn => btn.addEventListener('click', () => {{
   document.querySelectorAll('#filters button').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
