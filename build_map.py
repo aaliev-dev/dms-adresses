@@ -34,6 +34,19 @@ CSV_FILE = ROOT / "data" / "clinics.csv"
 DOCS = ROOT / "docs"
 CLINICS_JSON = DOCS / "clinics.json"
 INDEX_HTML = DOCS / "index.html"
+CLEANING_FILE = ROOT / "data" / "cleaning.txt"
+
+
+def read_cleaning() -> set[str]:
+    """Адреса клиник с чисткой зубов по ДМС (точные адреса из CSV)."""
+    if not CLEANING_FILE.exists():
+        return set()
+    out = set()
+    for line in CLEANING_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            out.add(line)
+    return out
 
 
 def read_clinics() -> list[dict]:
@@ -63,6 +76,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     rows = read_clinics()
+    cleaning = read_cleaning()
     # Геокодируем каждый уникальный адрес один раз
     unique_addresses = list(dict.fromkeys(r["address"] for r in rows))
     if args.limit:
@@ -108,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
             "services": r["services"],
             "website": r.get("website", "").strip(),
             "rating": r.get("rating", "").strip(),
+            "cleaning": r["address"] in cleaning,
         })
 
     DOCS.mkdir(parents=True, exist_ok=True)
@@ -210,6 +225,7 @@ def render_page(data_json: str, api_key: str) -> str:
       <button data-filter="home">На дому</button>
       <button data-filter="stomat">Стоматология</button>
       <button data-filter="urgent">Экстренные</button>
+      <button data-filter="cleaning">🦷 Чистка зубов</button>
     </div>
     <div id="filters2">
       <select id="ratingFilter" aria-label="Фильтр по рейтингу">
@@ -244,6 +260,7 @@ let mapInstance, clusterer;
 const allObjects = [];   // все метки: id + pm + c
 
 function markerColor(c) {{
+  if (c.cleaning) return 'islands#goldCircleDotIcon';
   const s = (c.services || '').toLowerCase();
   if (s.includes('экстренн')) return 'islands#redMedicalIcon';
   if (s.includes('стоматолог')) return 'islands#violetMedicalIcon';
@@ -259,10 +276,11 @@ function balloonContent(c) {{
   const hours = c.hours ? `<div>🕒 ${{c.hours}}</div>` : '';
   const services = c.services ? `<div>🏥 ${{c.services}}</div>` : '';
   const rating = c.rating ? `<div>⭐ ${{c.rating}}</div>` : '';
+  const cleaning = c.cleaning ? `<div>🦷 Чистка зубов по ДМС</div>` : '';
   const website = c.website ? `<div>🌐 <a href="${{c.website}}" target="_blank" rel="noopener">${{c.website}}</a></div>` : '';
   const yalink = `https://yandex.ru/maps/?pt=${{c.lon}},${{c.lat}}&z=17&l=pm2rdl&text=${{encodeURIComponent(c.address)}}`;
   const yandex = `<div>🗺 <a href="${{yalink}}" target="_blank" rel="noopener">Подробнее в Яндекс Картах</a></div>`;
-  return `<b>${{c.clinic}}</b><br><div>${{c.address}}</div>${{rating}}${{phones}}${{hours}}${{services}}${{website}}${{yandex}}`;
+  return `<b>${{c.clinic}}</b><br><div>${{c.address}}</div>${{rating}}${{cleaning}}${{phones}}${{hours}}${{services}}${{website}}${{yandex}}`;
 }}
 
 function visibleClinics() {{
@@ -276,7 +294,8 @@ function visibleClinics() {{
       activeFilter === 'amb' ? s.includes('амбулаторно') :
       activeFilter === 'home' ? s.includes('на дому') :
       activeFilter === 'stomat' ? s.includes('стоматолог') :
-      activeFilter === 'urgent' ? s.includes('экстренн') : true;
+      activeFilter === 'urgent' ? s.includes('экстренн') :
+      activeFilter === 'cleaning' ? c.cleaning : true;
     const r = parseFloat((c.rating || '').replace(',', '.'));
     const byRating = !c.rating || r >= minRating;
     return byFilter && byRating && (!q || text.includes(q));
@@ -290,7 +309,7 @@ function renderList() {{
     const div = document.createElement('div');
     div.className = 'item';
     div.innerHTML =
-      `<div class="name">${{c.clinic}}</div>` +
+      `<div class="name">${{c.cleaning ? '🦷 ' : ''}}${{c.clinic}}</div>` +
       `<div class="addr">${{c.address}}</div>` +
       `<div class="meta">${{c.hours || ''}}${{c.hours ? ' · ' : ''}}${{c.services}}</div>`;
     div.addEventListener('click', () => showOnMap(c.id));
