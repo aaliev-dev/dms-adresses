@@ -1,0 +1,9 @@
+# Секреты и локальное окружение
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
