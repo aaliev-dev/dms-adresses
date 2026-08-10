@@ -106,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
             "phones": phones,
             "hours": r["hours"],
             "services": r["services"],
+            "website": r.get("website", "").strip(),
         })
 
     DOCS.mkdir(parents=True, exist_ok=True)
@@ -135,7 +136,7 @@ def render_page(data_json: str, api_key: str) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ДМС: клиники на карте</title>
+<title>Клиники по ДМС Совкомбанка</title>
 <style>
   :root {{
     --accent: #2a6df4;
@@ -193,14 +194,16 @@ def render_page(data_json: str, api_key: str) -> str:
 <div id="app">
   <div id="sidebar">
     <header>
-      <h1>Клиники по ДМС</h1>
+      <h1>Клиники по ДМС Совкомбанка</h1>
       <div class="sub">Москва и Московская область</div>
     </header>
     <input id="search" type="text" placeholder="Поиск: клиника или адрес…">
     <div id="filters">
       <button data-filter="all" class="active">Все</button>
+      <button data-filter="amb">Амбулаторные</button>
       <button data-filter="home">На дому</button>
       <button data-filter="stomat">Стоматология</button>
+      <button data-filter="urgent">Экстренные</button>
     </div>
     <div id="count"></div>
     <div id="list"></div>
@@ -223,10 +226,12 @@ const sidebar = document.getElementById('sidebar');
 document.getElementById('toggle').addEventListener('click', () => sidebar.classList.toggle('open'));
 
 let activeFilter = 'all';
-let mapInstance, clusterer, placemarks = new Map();
+let mapInstance, clusterer;
+const allObjects = [];   // все метки: id + pm + c
 
 function markerColor(c) {{
   const s = (c.services || '').toLowerCase();
+  if (s.includes('экстренн')) return 'islands#redMedicalIcon';
   if (s.includes('стоматолог')) return 'islands#violetMedicalIcon';
   if (s.includes('на дому')) return 'islands#greenMedicalIcon';
   return 'islands#blueMedicalIcon';
@@ -237,46 +242,59 @@ function balloonContent(c) {{
     const pretty = p.replace(/^т[\\s.:]*/i, '');
     return `<div>☎ <a href="tel:${{pretty.replace(/\\D/g, '')}}">${{pretty}}</a></div>`;
   }}).join('');
-  const hours = c.hours ? `<div>🕒 {{{{c.hours}}}}</div>` : '';
-  const services = c.services ? `<div>🏥 {{{{c.services}}}}</div>` : '';
-  return `<b>{{{{c.clinic}}}}</b><br><div>{{{{c.address}}}}</div>${{phones}}${{hours}}${{services}}`;
+  const hours = c.hours ? `<div>🕒 ${{c.hours}}</div>` : '';
+  const services = c.services ? `<div>🏥 ${{c.services}}</div>` : '';
+  const website = c.website ? `<div>🌐 <a href="${{c.website}}" target="_blank" rel="noopener">${{c.website}}</a></div>` : '';
+  return `<b>${{c.clinic}}</b><br><div>${{c.address}}</div>${{phones}}${{hours}}${{services}}${{website}}`;
 }}
 
-function renderList() {{
+function visibleClinics() {{
   const q = searchEl.value.trim().toLowerCase();
-  let shown = 0;
-  listEl.innerHTML = '';
-  CLINICS.forEach(c => {{
+  return CLINICS.filter(c => {{
     const text = (c.clinic + ' ' + c.address).toLowerCase();
     const s = (c.services || '').toLowerCase();
     const byFilter =
       activeFilter === 'all' ? true :
-      activeFilter === 'home' ? s.includes('на дому') : s.includes('стоматолог');
-    const visible = byFilter && (!q || text.includes(q));
+      activeFilter === 'amb' ? s.includes('амбулаторно') :
+      activeFilter === 'home' ? s.includes('на дому') :
+      activeFilter === 'stomat' ? s.includes('стоматолог') :
+      activeFilter === 'urgent' ? s.includes('экстренн') : true;
+    return byFilter && (!q || text.includes(q));
+  }});
+}}
+
+function renderList() {{
+  const visible = visibleClinics();
+  listEl.innerHTML = '';
+  visible.forEach(c => {{
     const div = document.createElement('div');
-    div.className = 'item' + (visible ? '' : ' hidden');
+    div.className = 'item';
     div.innerHTML =
       `<div class="name">${{c.clinic}}</div>` +
       `<div class="addr">${{c.address}}</div>` +
       `<div class="meta">${{c.hours || ''}}${{c.hours ? ' · ' : ''}}${{c.services}}</div>`;
     div.addEventListener('click', () => showOnMap(c.id));
     listEl.appendChild(div);
-    if (visible) shown++;
   }});
-  countEl.textContent = `Показано: ${{shown}} из ${{CLINICS.length}}`;
+  countEl.textContent = `Показано: ${{visible.length}} из ${{CLINICS.length}}`;
+}}
+
+function applyFilters() {{
+  if (!clusterer) return;
+  const visible = new Set(visibleClinics().map(c => c.id));
+  clusterer.remove(allObjects.map(o => o.pm));
+  clusterer.add(allObjects.filter(o => visible.has(o.id)).map(o => o.pm));
+  renderList();
 }}
 
 function showOnMap(id) {{
-  const c = CLINICS.find(x => x.id === id);
-  if (!c) return;
-  mapInstance.setCenter([c.lat, c.lon], 15, {{duration: 400}});
-  const pm = placemarks.get(id);
-  if (pm) {{
-    mapInstance.balloon.open(pm.geometry.getCoordinates(), balloonContent(c));
-  }}
+  const obj = allObjects.find(x => x.id === id);
+  if (!obj) return;
+  mapInstance.setCenter([obj.c.lat, obj.c.lon], 15, {{duration: 400}});
+  mapInstance.balloon.open(obj.pm.geometry.getCoordinates(), balloonContent(obj.c));
   document.querySelectorAll('.item').forEach(el => el.classList.remove('active'));
   const items = document.querySelectorAll('.item');
-  const idx = CLINICS.findIndex(x => x.id === id);
+  const idx = visibleClinics().findIndex(c => c.id === id);
   if (items[idx]) items[idx].classList.add('active');
 }}
 
@@ -292,25 +310,24 @@ function initMap() {{
     clusterDisableClickZoom: false
   }});
 
-  const geo = CLINICS.map(c => {{
+  CLINICS.forEach(c => {{
     const pm = new ymaps.Placemark([c.lat, c.lon], {{
       hintContent: c.clinic,
       balloonContent: balloonContent(c)
     }}, {{ preset: markerColor(c) }});
-    placemarks.set(c.id, pm);
-    return pm;
+    allObjects.push({{ id: c.id, pm: pm, c: c }});
   }});
-  clusterer.add(geo);
+  clusterer.add(allObjects.map(o => o.pm));
   mapInstance.geoObjects.add(clusterer);
-  renderList();
+  applyFilters();
 }}
 
-searchEl.addEventListener('input', renderList);
+searchEl.addEventListener('input', applyFilters);
 document.querySelectorAll('#filters button').forEach(btn => btn.addEventListener('click', () => {{
   document.querySelectorAll('#filters button').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   activeFilter = btn.dataset.filter;
-  renderList();
+  applyFilters();
 }}));
 
 // Список рисуем сразу — он не зависит от загрузки карты.
