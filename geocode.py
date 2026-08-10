@@ -32,7 +32,7 @@ from pathlib import Path
 
 import requests
 
-GEOCODER_URL = "https://geocode-maps.yandex.ru/1.x/"
+GEOCODER_URL = "https://geocode-maps.yandex.ru/v1/"
 
 # Кэш координат: адрес -> [долгота, широта].
 # Геокодирование — медленное и с лимитами, поэтому результат сохраняем
