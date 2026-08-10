@@ -278,7 +278,7 @@ function balloonContent(c) {{
   const rating = c.rating ? `<div>⭐ ${{c.rating}}</div>` : '';
   const cleaning = c.cleaning ? `<div>🦷 Чистка зубов по ДМС</div>` : '';
   const website = c.website ? `<div>🌐 <a href="${{c.website}}" target="_blank" rel="noopener">${{c.website}}</a></div>` : '';
-  const yalink = `https://yandex.ru/maps/?pt=${{c.lon}},${{c.lat}}&z=17&l=pm2rdl&text=${{encodeURIComponent(c.address)}}`;
+  const yalink = `https://yandex.ru/maps/?text=${{encodeURIComponent(c.clinic + ', ' + c.address)}}`;
   const yandex = `<div>🗺 <a href="${{yalink}}" target="_blank" rel="noopener">Подробнее в Яндекс Картах</a></div>`;
   return `<b>${{c.clinic}}</b><br><div>${{c.address}}</div>${{rating}}${{cleaning}}${{phones}}${{hours}}${{services}}${{website}}${{yandex}}`;
 }}
