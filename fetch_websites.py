@@ -48,6 +48,7 @@ AGGREGATORS = (
     "flamp", "yell", "health.mail", "yandex.ru/maps", "yandex.by", "yandex.kz",
     "sberhealth", "instadoc", "vse-zabolevaniya", "lookmedbook", "mamadeti",
     "spr.ru", "medicina.ru", "doctorpiter", "medweb", "medsovet", "sprosivracha",
+    "google.com", "google.ru",
 )
 
 ORG_PREFIXES = (
@@ -83,8 +84,8 @@ def search_query(clinic: str) -> str:
                 "", q,
             )
             break
+    q = re.sub(r"\s*\([^()]*\)", "", q)      # убрать «(АО «ЦБЭЛИС»)»
     q = q.strip('«»"() :,.-')
-    q = re.sub(r"\s*\([^)]*\)\s*$", "", q)   # хвост «(АО «ЦБЭЛИС»)»
     q = re.sub(r"\s*ДЗМ\s*$", "", q)  # «…Кончаловского ДЗМ» -> «…Кончаловского»
     return q or clinic.strip()
 
@@ -116,6 +117,20 @@ def bing_decode(href: str) -> str:
             except Exception:
                 pass
     return href
+
+
+def google_results(query: str) -> list[tuple[str, str]]:
+    """Выдача Google: ссылки вида /url?q=<url>. Часто требует обхода капчи,
+    поэтому это запасной вариант — основной источник Яндекс."""
+    resp = requests.get("https://www.google.com/search",
+                        params={"q": query, "hl": "ru"}, headers=HEADERS, timeout=15)
+    resp.raise_for_status()
+    out = []
+    for m in re.finditer(r'<a[^>]*href="/url\?q=([^&"]+)', resp.text):
+        url = unquote(m.group(1))
+        if url.startswith("http"):
+            out.append((url, ""))
+    return out
 
 
 def bing_results(query: str) -> list[tuple[str, str]]:
@@ -157,7 +172,7 @@ def find_website(clinic: str) -> str:
     human = search_query(clinic)
     queries = [f"{human} официальный сайт", human]
     for query in queries:
-        for fetcher in (yandex_results, bing_results, ddg_results):
+        for fetcher in (yandex_results, google_results, bing_results, ddg_results):
             try:
                 results = fetcher(query)
             except requests.RequestException:
