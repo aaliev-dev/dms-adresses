@@ -113,16 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(clinics, ensure_ascii=False, indent=1), encoding="utf-8"
     )
 
-    api_key = ""
-    try:
-        api_key = geocode.load_api_key()
-    except SystemExit:
-        print(
-            "Предупреждение: не задан API-ключ (YANDEX_API_KEY), в страницу "
-            "будет вставлен плейсхолдер. Карта заработает после подстановки ключа.",
-            file=sys.stderr,
-        )
-        api_key = "YOUR_JS_API_KEY"
+    api_key = geocode.load_js_api_key()
     # Безопасная вставка JSON в <script>: экранируем "</"
     data_json = json.dumps(clinics, ensure_ascii=False).replace("</", "<\\/")
     index_html = render_page(data_json, api_key)

@@ -65,25 +65,46 @@ class Point:
     style: str  # код стиля из MARKER_STYLES
 
 
-def load_api_key() -> str:
-    """Ключ берём из переменной окружения YANDEX_API_KEY либо из файла .env
-    рядом со скриптом (см. .env.example)."""
-    key = os.environ.get("YANDEX_API_KEY")
-    if key:
-        return key.strip()
+def read_env() -> dict[str, str]:
+    """Читает переменные из окружения и из файла .env рядом со скриптом.
+
+    Приоритет у переменных окружения; файл .env — для локальной разработки.
+    """
+    values: dict[str, str] = {}
     env_file = Path(__file__).parent / ".env"
     if env_file.exists():
         for line in env_file.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 name, _, value = line.partition("=")
-                if name.strip() == "YANDEX_API_KEY":
-                    return value.strip()
+                values[name.strip()] = value.strip()
+    for name, value in os.environ.items():
+        if value:
+            values[name] = value.strip()
+    return values
+
+
+def load_api_key() -> str:
+    """Ключ HTTP Геокодера: YANDEX_GEOCODER_KEY, запасной вариант —
+    YANDEX_API_KEY (устаревшее имя)."""
+    env = read_env()
+    key = env.get("YANDEX_GEOCODER_KEY") or env.get("YANDEX_API_KEY", "")
+    if key:
+        return key
     raise SystemExit(
-        "Не найден API-ключ.\n"
-        "Задайте переменную окружения YANDEX_API_KEY или положите файл .env "
-        "рядом со скриптом (шаблон — в .env.example)."
+        "Не найден ключ геокодера.\n"
+        "Задайте YANDEX_GEOCODER_KEY в .env (шаблон — в .env.example)."
     )
+
+
+def load_js_api_key() -> str:
+    """Ключ JavaScript API (для страницы карты): YANDEX_MAPS_JS_KEY.
+
+    Клиентский ключ — он встраивается в HTML и попадает в браузер по задумке
+    Яндекса. Если отдельного JS-ключа нет, можно использовать ключ геокодера.
+    """
+    env = read_env()
+    return env.get("YANDEX_MAPS_JS_KEY") or load_api_key()
 
 
 def geocode(address: str, api_key: str, retries: int = 3) -> tuple[float, float]:
