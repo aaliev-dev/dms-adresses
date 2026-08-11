@@ -187,20 +187,14 @@ def render_page(data_json: str, api_key: str) -> str:
   #sidebar .sub {{ color: #667; font-size: 12.5px; }}
   #search {{ margin: 10px 16px 6px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; }}
   #filters {{ display: flex; gap: 6px; padding: 0 16px 10px; flex-wrap: wrap; }}
+  .filter-dot {{
+    display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+    margin-right: 5px; vertical-align: -1px;
+  }}
   #filters2 {{ padding: 0 16px 10px; }}
   #ratingFilter {{
     width: 100%; padding: 7px 10px; border: 1px solid var(--border);
     border-radius: 8px; font-size: 13px; background: #fff; color: #223;
-  }}
-  #legend {{
-    margin: 2px 16px 12px; padding: 10px 12px; border: 1px solid var(--border);
-    border-radius: 8px; background: #fafbfd; font-size: 12px; color: #445;
-  }}
-  #legend .legend-title {{ font-weight: 600; margin-bottom: 6px; color: #334; }}
-  .legend-item {{ display: flex; align-items: center; gap: 8px; margin: 3px 0; }}
-  .legend-dot {{
-    width: 12px; height: 12px; border-radius: 50%; flex: 0 0 12px;
-    border: 1px solid rgba(0,0,0,.15);
   }}
   #filters button {{
     border: 1px solid var(--border); background: #fff; border-radius: 20px;
@@ -244,11 +238,11 @@ def render_page(data_json: str, api_key: str) -> str:
     <input id="search" type="text" placeholder="Поиск: клиника или адрес…">
     <div id="filters">
       <button data-filter="all" class="active">Все</button>
-      <button data-filter="amb">Амбулаторные</button>
-      <button data-filter="home">На дому</button>
-      <button data-filter="stomat">Стоматология</button>
-      <button data-filter="urgent">Экстренные</button>
-      <button data-filter="cleaning">🦷 Чистка зубов</button>
+      <button data-filter="amb"><span class="filter-dot" style="background:#1d98ff"></span>Амбулаторные</button>
+      <button data-filter="home"><span class="filter-dot" style="background:#31b53f"></span>На дому</button>
+      <button data-filter="stomat"><span class="filter-dot" style="background:#8b4cff"></span>Стоматология</button>
+      <button data-filter="urgent"><span class="filter-dot" style="background:#e64848"></span>Экстренные</button>
+      <button data-filter="cleaning"><span class="filter-dot" style="background:#ffb400"></span>🦷 Чистка зубов</button>
     </div>
     <div id="filters2">
       <select id="ratingFilter" aria-label="Фильтр по рейтингу">
@@ -256,14 +250,6 @@ def render_page(data_json: str, api_key: str) -> str:
         <option value="4.5">⭐ от 4.5</option>
         <option value="4.0">⭐ от 4.0</option>
       </select>
-    </div>
-    <div id="legend">
-      <div class="legend-title">Цвета меток</div>
-      <div class="legend-item"><span class="legend-dot" style="background:#ffcc00"></span>Чистка зубов по ДМС</div>
-      <div class="legend-item"><span class="legend-dot" style="background:#2a6df4"></span>Амбулаторная помощь</div>
-      <div class="legend-item"><span class="legend-dot" style="background:#a04ae0"></span>Стоматология</div>
-      <div class="legend-item"><span class="legend-dot" style="background:#4caf50"></span>Помощь на дому</div>
-      <div class="legend-item"><span class="legend-dot" style="background:#e53935"></span>Экстренная помощь</div>
     </div>
     <div id="count"></div>
     <div id="list"></div>
