@@ -191,6 +191,12 @@ def render_page(data_json: str, api_key: str) -> str:
     display: inline-block; width: 10px; height: 10px; border-radius: 50%;
     margin-right: 5px; vertical-align: -1px;
   }}
+  .tag {{
+    display: inline-block; padding: 2px 8px; margin: 2px 4px 2px 0;
+    border-radius: 12px; font-size: 11px; background: #f1f3f7;
+    color: #334; border: 1px solid var(--border); white-space: nowrap;
+  }}
+  .tag .tag-dot {{ display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }}
   #filters2 {{ padding: 0 16px 10px; }}
   #ratingFilter {{
     width: 100%; padding: 7px 10px; border: 1px solid var(--border);
@@ -242,7 +248,7 @@ def render_page(data_json: str, api_key: str) -> str:
       <button data-filter="home"><span class="filter-dot" style="background:#31b53f"></span>На дому</button>
       <button data-filter="stomat"><span class="filter-dot" style="background:#8b4cff"></span>Стоматология</button>
       <button data-filter="urgent"><span class="filter-dot" style="background:#e64848"></span>Экстренные</button>
-      <button data-filter="cleaning"><span class="filter-dot" style="background:#ffb400"></span>🦷 Чистка зубов</button>
+      <button data-filter="cleaning">🦷 Чистка зубов</button>
     </div>
     <div style="padding:0 16px 10px;font-size:11.5px;color:#889">Чёрная метка — совмещённая клиника (несколько услуг)</div>
     <div id="filters2">
@@ -278,7 +284,6 @@ let mapInstance, clusterer;
 const allObjects = [];   // все метки: id + pm + c
 
 function markerColor(c) {{
-  if (c.cleaning) return 'islands#goldCircleDotIcon';
   const s = (c.services || '').toLowerCase();
   let cats = 0;
   if (s.includes('амбулаторно')) cats++;
@@ -300,11 +305,23 @@ function balloonContent(c) {{
   const hours = c.hours ? `<div>🕒 ${{c.hours}}</div>` : '';
   const services = c.services ? `<div>🏥 ${{c.services}}</div>` : '';
   const rating = c.rating ? `<div>⭐ ${{c.rating}}</div>` : '';
-  const cleaning = c.cleaning ? `<div>🦷 Чистка зубов по ДМС</div>` : '';
   const website = c.website ? `<div>🌐 <a href="${{c.website}}" target="_blank" rel="noopener">${{c.website}}</a></div>` : '';
   const yalink = c.ymaps || `https://yandex.ru/maps/?text=${{encodeURIComponent(c.clinic + ', ' + c.address)}}`;
   const yandex = `<div>🗺 <a href="${{yalink}}" target="_blank" rel="noopener">Подробнее в Яндекс Картах</a></div>`;
-  return `<b>${{c.clinic}}</b><br><div>${{c.address}}</div>${{rating}}${{cleaning}}${{phones}}${{hours}}${{services}}${{website}}${{yandex}}`;
+  const tags = categoryTags(c);
+  return `<b>${{c.clinic}}</b><br><div>${{c.address}}</div>${{tags}}${{rating}}${{phones}}${{hours}}${{services}}${{website}}${{yandex}}`;
+}}
+
+function categoryTags(c) {{
+  const s = (c.services || '').toLowerCase();
+  const out = [];
+  const add = (color, label) => out.push(`<span class="tag"><span class="tag-dot" style="background:${{color}}"></span>${{label}}</span>`);
+  if (c.cleaning) add('#ffb400', 'Чистка зубов');
+  if (s.includes('амбулаторно')) add('#1d98ff', 'Амбулаторная');
+  if (s.includes('на дому')) add('#31b53f', 'На дому');
+  if (s.includes('стоматолог')) add('#8b4cff', 'Стоматология');
+  if (s.includes('экстренн')) add('#e64848', 'Экстренная');
+  return out.length ? `<div>${{out.join('')}}</div>` : '';
 }}
 
 function visibleClinics() {{
