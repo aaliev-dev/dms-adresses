@@ -75,13 +75,14 @@
     </header>
     <input id="search" type="text" placeholder="Поиск: клиника или адрес…">
     <div id="filters">
-      <button data-filter="all" class="active">Все</button>
+      <button data-filter="all" class="active"><span class="filter-dot" style="background:#333"></span>Все</button>
       <button data-filter="amb"><span class="filter-dot" style="background:#1d98ff"></span>Амбулаторные</button>
       <button data-filter="home"><span class="filter-dot" style="background:#31b53f"></span>На дому</button>
       <button data-filter="stomat"><span class="filter-dot" style="background:#8b4cff"></span>Стоматология</button>
       <button data-filter="urgent"><span class="filter-dot" style="background:#e64848"></span>Экстренные</button>
       <button data-filter="cleaning"><span class="filter-dot" style="background:#ffb400"></span>🦷 Чистка зубов</button>
     </div>
+    <div style="padding:0 16px 10px;font-size:11.5px;color:#889">Чёрная метка — совмещённая клиника (несколько услуг)</div>
     <div id="filters2">
       <select id="ratingFilter" aria-label="Фильтр по рейтингу">
         <option value="0">Любой рейтинг</option>
@@ -117,6 +118,12 @@ const allObjects = [];   // все метки: id + pm + c
 function markerColor(c) {
   if (c.cleaning) return 'islands#goldCircleDotIcon';
   const s = (c.services || '').toLowerCase();
+  let cats = 0;
+  if (s.includes('амбулаторно')) cats++;
+  if (s.includes('стоматолог')) cats++;
+  if (s.includes('на дому')) cats++;
+  if (s.includes('экстренн')) cats++;
+  if (cats >= 2) return 'islands#blackMedicalIcon'; // совмещённые (несколько услуг)
   if (s.includes('экстренн')) return 'islands#redMedicalIcon';
   if (s.includes('стоматолог')) return 'islands#violetMedicalIcon';
   if (s.includes('на дому')) return 'islands#greenMedicalIcon';
