@@ -112,11 +112,11 @@ def find_rating(page, human: str) -> tuple[float | None, str]:
     Возвращает (рейтинг, permalink). permalink — URL вида
     yandex.ru/maps/org/<slug>/<id>/ (если Яндекс открыл карточку), иначе ''.
     """
+    perm = ""
     try:
         page.goto("https://yandex.ru/maps/?text=" + human.replace(" ", "+"), timeout=40000)
         page.wait_for_timeout(6000)
         url = page.url
-        perm = ""
         m_org = re.search(r"(https://yandex\.ru/maps/org/[^/]+/\d+/)", url)
         if m_org:
             perm = m_org.group(1)
