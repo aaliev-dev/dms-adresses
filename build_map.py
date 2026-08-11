@@ -192,6 +192,16 @@ def render_page(data_json: str, api_key: str) -> str:
     width: 100%; padding: 7px 10px; border: 1px solid var(--border);
     border-radius: 8px; font-size: 13px; background: #fff; color: #223;
   }}
+  #legend {{
+    margin: 2px 16px 12px; padding: 10px 12px; border: 1px solid var(--border);
+    border-radius: 8px; background: #fafbfd; font-size: 12px; color: #445;
+  }}
+  #legend .legend-title {{ font-weight: 600; margin-bottom: 6px; color: #334; }}
+  .legend-item {{ display: flex; align-items: center; gap: 8px; margin: 3px 0; }}
+  .legend-dot {{
+    width: 12px; height: 12px; border-radius: 50%; flex: 0 0 12px;
+    border: 1px solid rgba(0,0,0,.15);
+  }}
   #filters button {{
     border: 1px solid var(--border); background: #fff; border-radius: 20px;
     padding: 5px 12px; font-size: 12.5px; cursor: pointer; color: #445;
@@ -246,6 +256,14 @@ def render_page(data_json: str, api_key: str) -> str:
         <option value="4.5">⭐ от 4.5</option>
         <option value="4.0">⭐ от 4.0</option>
       </select>
+    </div>
+    <div id="legend">
+      <div class="legend-title">Цвета меток</div>
+      <div class="legend-item"><span class="legend-dot" style="background:#ffcc00"></span>Чистка зубов по ДМС</div>
+      <div class="legend-item"><span class="legend-dot" style="background:#2a6df4"></span>Амбулаторная помощь</div>
+      <div class="legend-item"><span class="legend-dot" style="background:#a04ae0"></span>Стоматология</div>
+      <div class="legend-item"><span class="legend-dot" style="background:#4caf50"></span>Помощь на дому</div>
+      <div class="legend-item"><span class="legend-dot" style="background:#e53935"></span>Экстренная помощь</div>
     </div>
     <div id="count"></div>
     <div id="list"></div>
