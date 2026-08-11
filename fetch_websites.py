@@ -34,6 +34,7 @@ ROOT = Path(__file__).parent
 CSV_FILE = ROOT / "data" / "clinics.csv"
 SITES_FILE = ROOT / "data" / "websites.json"
 RATINGS_FILE = ROOT / "data" / "ratings.json"
+PERMALINKS_FILE = ROOT / "data" / "permalinks.json"
 
 ORG_PREFIXES = (
     "ФГБУЗ", "ФГАОУ", "ФГБНУ", "ФГБОУ", "ГБУЗ", "ГАУЗ", "ФГБУ", "ООО", "МУЗ",
@@ -105,35 +106,43 @@ def find_website(page, human: str) -> str:
     return ""
 
 
-def find_rating(page, human: str) -> float | None:
-    """Рейтинг клиники из Яндекс.Карт: первая организация в выдаче."""
+def find_rating(page, human: str) -> tuple[float | None, str]:
+    """Рейтинг и ссылка на карточку организации из Яндекс.Карт.
+
+    Возвращает (рейтинг, permalink). permalink — URL вида
+    yandex.ru/maps/org/<slug>/<id>/ (если Яндекс открыл карточку), иначе ''.
+    """
     try:
         page.goto("https://yandex.ru/maps/?text=" + human.replace(" ", "+"), timeout=40000)
         page.wait_for_timeout(6000)
+        url = page.url
+        perm = ""
+        m_org = re.search(r"(https://yandex\.ru/maps/org/[^/]+/\d+/)", url)
+        if m_org:
+            perm = m_org.group(1)
         body = page.evaluate("() => document.body ? document.body.innerText : ''")
-        # ищем рейтинг первой карточки: имя организации, затем «4,8»
         pos = body.find(human)
         if pos == -1:
-            # поиск по первым 25 символам имени
             pos = body.find(human[:25]) if len(human) > 25 else -1
         window_start = max(0, pos) if pos != -1 else 0
         window = body[window_start: window_start + 200]
         m = re.search(r"([1-5][.,]\d)", window)
         if m:
-            return float(m.group(1).replace(",", "."))
-        # если имя не нашли — первый рейтинг в тексте вообще
+            return float(m.group(1).replace(",", ".")), perm
         m2 = re.search(r"([1-5][.,]\d)", body[:600])
         if m2:
-            return float(m2.group(1).replace(",", "."))
+            return float(m2.group(1).replace(",", ".")), perm
     except Exception:
         pass
-    return None
+    return None, perm
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=0, help="только первые N клиник")
     parser.add_argument("--dry-run", action="store_true", help="показать запросы без поиска")
+    parser.add_argument("--permalinks-only", action="store_true",
+                        help="собирать только ссылки на карточки (без сайтов)")
     args = parser.parse_args(argv)
 
     if not CSV_FILE.exists():
@@ -155,8 +164,18 @@ def main(argv: list[str] | None = None) -> int:
 
     sites = load_json(SITES_FILE)
     ratings = load_json(RATINGS_FILE)
-    todo = [c for c in unique_clinics if c not in sites or c not in ratings]
-    print(f"Сайтов в кэше: {len(sites)}, рейтингов: {len(ratings)}, осталось: {len(todo)}")
+    permalinks = load_json(PERMALINKS_FILE)
+
+    def todo_list():
+        for c in unique_clinics:
+            need_site = not args.permalinks_only and c not in sites
+            need_rating = c not in ratings
+            need_perm = c not in permalinks or not permalinks[c]
+            if need_site or need_rating or need_perm:
+                yield c
+
+    todo = list(todo_list())
+    print(f"Сайтов: {len(sites)}, рейтингов: {len(ratings)}, пермалинков: {len(permalinks)}, осталось: {len(todo)}")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False, args=CHROME_ARGS)
@@ -166,13 +185,18 @@ def main(argv: list[str] | None = None) -> int:
 
         for i, name in enumerate(todo, start=1):
             human = search_query(name)
-            if name not in sites:
+            if not args.permalinks_only and name not in sites:
                 sites[name] = find_website(page, human)
                 save_json(SITES_FILE, sites)
-            if name not in ratings:
-                ratings[name] = find_rating(page, human)
-                save_json(RATINGS_FILE, ratings)
-            print(f"[{i}/{len(todo)}] сайт={sites[name] or '-':32} рейтинг={ratings[name]} {name[:40]}")
+            if name not in ratings or name not in permalinks or not permalinks[name]:
+                rating, perm = find_rating(page, human)
+                if name not in ratings:
+                    ratings[name] = rating
+                    save_json(RATINGS_FILE, ratings)
+                if perm:
+                    permalinks[name] = perm
+                    save_json(PERMALINKS_FILE, permalinks)
+            print(f"[{i}/{len(todo)}] сайт={sites.get(name, '-') or '-':28} рейтинг={ratings.get(name)} perm={'+' if permalinks.get(name) else '-'} {name[:40]}")
 
         browser.close()
 

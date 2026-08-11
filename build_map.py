@@ -35,6 +35,17 @@ DOCS = ROOT / "docs"
 CLINICS_JSON = DOCS / "clinics.json"
 INDEX_HTML = DOCS / "index.html"
 CLEANING_FILE = ROOT / "data" / "cleaning.txt"
+PERMALINKS_FILE = ROOT / "data" / "permalinks.json"
+
+
+def read_permalinks() -> dict[str, str]:
+    if not PERMALINKS_FILE.exists():
+        return {}
+    try:
+        import json as _json
+        return _json.loads(PERMALINKS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
 
 def read_cleaning() -> set[str]:
@@ -77,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
 
     rows = read_clinics()
     cleaning = read_cleaning()
+    permalinks = read_permalinks()
     # Геокодируем каждый уникальный адрес один раз
     unique_addresses = list(dict.fromkeys(r["address"] for r in rows))
     if args.limit:
@@ -123,6 +135,7 @@ def main(argv: list[str] | None = None) -> int:
             "website": r.get("website", "").strip(),
             "rating": r.get("rating", "").strip(),
             "cleaning": r["address"] in cleaning,
+            "ymaps": permalinks.get(r["clinic"], ""),
         })
 
     DOCS.mkdir(parents=True, exist_ok=True)
@@ -278,7 +291,7 @@ function balloonContent(c) {{
   const rating = c.rating ? `<div>⭐ ${{c.rating}}</div>` : '';
   const cleaning = c.cleaning ? `<div>🦷 Чистка зубов по ДМС</div>` : '';
   const website = c.website ? `<div>🌐 <a href="${{c.website}}" target="_blank" rel="noopener">${{c.website}}</a></div>` : '';
-  const yalink = `https://yandex.ru/maps/?text=${{encodeURIComponent(c.clinic + ', ' + c.address)}}`;
+  const yalink = c.ymaps || `https://yandex.ru/maps/?text=${{encodeURIComponent(c.clinic + ', ' + c.address)}}`;
   const yandex = `<div>🗺 <a href="${{yalink}}" target="_blank" rel="noopener">Подробнее в Яндекс Картах</a></div>`;
   return `<b>${{c.clinic}}</b><br><div>${{c.address}}</div>${{rating}}${{cleaning}}${{phones}}${{hours}}${{services}}${{website}}${{yandex}}`;
 }}
